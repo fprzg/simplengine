@@ -1,5 +1,6 @@
 
 #include <shlwapi.h>
+#include "simplengine_profiler.h"
 
 //
 // PLATFORM MEMORY
@@ -12,7 +13,7 @@ platform_MemoryAlloc(u64 Size)
 }
 
 inline void
-platform_MemoryFree(void *Ptr)
+platform_MemoryRelease(void *Ptr)
 {
     free(Ptr);
 }
@@ -44,6 +45,7 @@ platform_MemoryMove(void *Dst, void *Src, u64 Count)
 b8
 platform_ReadFileFromHandle(read_file *File, HANDLE HandleFile)
 {
+    profiler_Begin();
     *File = {};
     
     if(HandleFile == INVALID_HANDLE_VALUE)
@@ -63,7 +65,7 @@ platform_ReadFileFromHandle(read_file *File, HANDLE HandleFile)
     DWORD BytesRead;
     if(!ReadFile(HandleFile, File->Content, (DWORD)File->Size, &BytesRead, null))
     {
-        platform_MemoryFree(File->Content);
+        platform_MemoryRelease(File->Content);
         *File = {};
         return false;
     }
@@ -74,12 +76,15 @@ platform_ReadFileFromHandle(read_file *File, HANDLE HandleFile)
         // We couldn't read the creation, last access and last write times.
     }
     
+    profiler_End();
     return true;
 }
 
 b8
 platform_ReadFile(read_file *File, char* FilePath)
 {
+    profiler_Begin();
+    
     HANDLE HandleFile = CreateFile(FilePath,
                                    GENERIC_READ,
                                    FILE_SHARE_READ,
@@ -93,5 +98,6 @@ platform_ReadFile(read_file *File, char* FilePath)
     
     File->FilePath = FilePath;
     
+    profiler_End();
     return Result;
 }

@@ -1,6 +1,6 @@
 
 b8
-platform_EnableOpenGL(HWND hWnd, HDC *hDC, HGLRC *hRC)
+ogl_Enable(HWND hWnd, HDC *hDC, HGLRC *hRC)
 {
     PIXELFORMATDESCRIPTOR pfd = {0};
     int format;

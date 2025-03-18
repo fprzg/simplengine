@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define _PLATFORM_WIN32 1
+#define ogl_ExitOnError 1
 
 #include "simplengine.h"
 #include "simplengine_opengl.h"
@@ -143,17 +144,24 @@ basic_shader_CompileFromFile(basic_shader *Shader, read_file *File, GLenum Type)
     Shader->LastWriteTime = File->LastWriteTime;
     Shader->Type = Type;
     
-    Shader->ID = glCreateShader(Type);
-    glShaderSource(Shader->ID, 1, (const GLchar *const *)&File->Content, null);
-    glCompileShader(Shader->ID);
+    GLuint Result = glCreateShader(Type);
+    ogl_CheckError();
+    Shader->ID = Result;
     
-    char Log[512];
+    glShaderSource(Shader->ID, 1, (const GLchar *const *)&File->Content, (GLint *)&File->Size);
+    ogl_CheckError();
+    
+    glCompileShader(Shader->ID);
+    ogl_CheckError();
+    
     int Success;
     glGetShaderiv(Shader->ID, GL_COMPILE_STATUS, &Success);
     if(!Success)
     {
+        char Log[512];
         glGetShaderInfoLog(Shader->ID, sizeof(Log), null, Log);
         printf("Shader compilation error @ '%s': %s\n", Shader->FilePath, Log);
+        printf("%s\n", (char *)File->Content);
     }
     
     profiler_End();
@@ -173,6 +181,13 @@ basic_shader_Compile(basic_shader *Shader, char *FilePath, GLenum Type)
     }
     
     b8 Result = basic_shader_CompileFromFile(Shader, &File, Type);;
+    
+    if(Result == 0)
+    {
+        debugger_placeholder();
+    }
+    
+    
     free(File.Content);
     
     profiler_End();
@@ -400,7 +415,7 @@ LoadOBJ(scene *Scene, char *FilePath)
         
     }
     
-    platform_MemoryFree(File.Content);
+    platform_MemoryRelease(File.Content);
     
     profiler_End();
     return true;
@@ -487,7 +502,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdS
     // Initialize OpenGL
     HDC DeviceContext;
     HGLRC GLReferenceContext;
-    platform_EnableOpenGL(Window, &DeviceContext, &GLReferenceContext);
+    ogl_Enable(Window, &DeviceContext, &GLReferenceContext);
     
     basic_shader VertexShader, FragmentShader;
     {

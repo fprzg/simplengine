@@ -24,8 +24,15 @@
 #define array_count(array) (sizeof(array)/sizeof((array)[0]))
 #define typeof decltype
 #define stringify(token) #token
-#define indexed_addressing()
+
 #define calc_offset(left, right) ((uintptr)(left) - (uintptr)(right))
+#define indexed_addressing(base, offset, index, stride) to_voidptr( \
+to_uintptr(base) + \
+to_uintptr(offset) + \
+to_uintptr(index) * to_uintptr(stride) \
+)
+
+#define debugger_placeholder() do { int a = 1; } while(false)
 
 #ifndef null
 #define null nullptr
@@ -37,7 +44,7 @@
 #define assert(expr, ...) do { \
 if(!(expr)) \
 { \
-printf("Assertion failed %s:%s:%d: ", __FILE__,__FUNCTION__,  __LINE__);\
+printf("Assertion failed at function %s (%s:%d): ", __FUNCTION__,__FILE__,  __LINE__);\
 printf(__VA_ARGS__); \
 printf("\n"); \
 abort_program(); \
@@ -66,7 +73,9 @@ typedef double f64;
 typedef unsigned char b8;
 typedef unsigned int b32;
 
-typedef u64 uintptr;
+typedef u64 uintptr; // depends on the platform
+
+
 
 static_assert(sizeof(s8) == 1, "s8 must have a size of 1.");
 static_assert(sizeof(s16) == 2, "s16 must have a size of 2.");
@@ -88,6 +97,27 @@ static_assert(sizeof(uintptr) == sizeof(void *), "uintptr must have the same siz
 
 
 
+#define to_u32(value) ((u32)(value))
+#define to_u64(value) ((u64)(value))
+
+#define to_f32(value) ((f32)(value))
+#define to_f64(value) ((f64)(value))
+
+#define to_u8ptr(value) ((u8 *)(value))
+#define to_voidptr(value) ((void *)(value))
+#define to_uintptr(value) ((uintptr)(value))
+
+//
+// HANDLES
+//
+
+#define uhandle_INVALID 0xffffffff
+
+typedef u32 uhandle;
+typedef u64 u64handle;
+
+
+
 //
 // PLATFORM MEMORY
 //
@@ -96,7 +126,7 @@ inline void *
 platform_MemoryAlloc(u64 Size);
 
 inline void
-platform_MemoryFree(void *Ptr);
+platform_MemoryRelease(void *Ptr);
 
 inline void
 platform_MemoryZero(void *Ptr, u64 Size);
@@ -149,6 +179,8 @@ struct arena
     void *Memory;
     u64 Offset;
     u64 Size;
+    
+    //struct arena *Next;
 };
 
 #define arena_DEFAULT_SIZE Mebibytes(4)
@@ -232,6 +264,185 @@ arena_Pop(arena *Arena, u64 Size)
 #define PushStructCopy(arena, src, type) PushArrayCopy(arena, src, 1, type)
 //#define PushArrayCopy(arena, src, size) (typeof(src)) arena_PushCopy(arena, src, (size)*sizeof(typeof(src)[0]))
 //#define PushStructCopy(arena, src) PushArrayCopy(arena, src, 1)
+
+
+
+//
+// CSTR
+//
+
+u32
+cstr_Copy(char *Src, char *Dst)
+{
+    u32 Count = 0;
+    
+    while(*Src)
+    {
+        Dst[Count] = Src[Count];
+        
+        ++Count;
+    }
+    
+    return Count;
+}
+
+u32
+cstr_NCopy(char *Src, char *Dst, u32 Size)
+{
+    u32 Count = 0;
+    
+    while(*Src && Size > Count)
+    {
+        Dst[Count] = Src[Count];
+        
+        ++Count;
+    }
+    
+    return Count;
+}
+
+
+
+//
+// STRINGS
+//
+
+struct string8_node
+{
+    uhandle Next;
+    u8 Content[60];
+};
+
+struct string8
+{
+    uhandle Head;
+    u32 Length;
+};
+
+static_assert(sizeof(string8_node) == 64, "str8 should have size 64");
+
+struct string8_node_pool
+{
+    string8_node *Pool;
+    u32 Capacity;
+    u32 Size;
+    
+    // Free nodes
+    uhandle Head;
+    uhandle Tail;
+};
+
+global string8_node_pool GlobalString8Pool;
+
+b8
+string8_node_pool_Init(u32 Capacity)
+{
+    GlobalString8Pool.Pool = (string8_node *)malloc(sizeof(string8) * Capacity);
+    GlobalString8Pool.Capacity = Capacity;
+    GlobalString8Pool.Size = 0;
+    GlobalString8Pool.Head = 0;
+    
+    for(int I = 0; I < Capacity - 1; ++I)
+    {
+        GlobalString8Pool.Pool[I].Next = I + 1;
+    }
+    
+    GlobalString8Pool.Pool[Capacity - 1].Next = uhandle_INVALID;
+    
+    return true;
+}
+
+void
+string8_node_pool_Shutdown(void)
+{
+    platform_MemoryRelease(GlobalString8Pool.Pool);
+    GlobalString8Pool = {};
+}
+
+inline string8_node *
+string8_node_pool_Get(uhandle Handle)
+{
+    string8_node *Node = null;
+    
+    if(Handle != uhandle_INVALID)
+    {
+        Node = (string8_node *)indexed_addressing(GlobalString8Pool.Pool, 0, Handle, sizeof(string8_node));
+    }
+    
+    return Node;
+}
+
+uhandle
+string8_node_pool_Borrow(void)
+{
+    uhandle Handle = GlobalString8Pool.Head;
+    if(Handle != uhandle_INVALID)
+    {
+        string8_node *Node = string8_node_pool_Get(Handle);
+        GlobalString8Pool.Head = Node->Next;
+        Node->Next = uhandle_INVALID;
+        platform_MemoryZero(Node->Content, sizeof(Node->Content));
+    }
+    
+    return Handle;
+}
+
+void
+string8_node_pool_Return(uhandle Handle)
+{
+    assert(false, "TODO: Implement %s", __FUNCTION__);
+}
+
+string8
+string8_Copy(char *Src)
+{
+    string8 String8 = {};
+    String8.Head = string8_node_pool_Borrow();
+    
+    string8_node *Node = string8_node_pool_Get(String8.Head);
+    
+    loop
+    {
+        u32 BytesCopied = 0;
+        loop
+        {
+            if(BytesCopied < sizeof(Node->Content))
+            {
+                Node->Content[BytesCopied] = Src[BytesCopied];
+                
+                if(Src[BytesCopied] == '\0')
+                {
+                    break;
+                }
+                
+                ++BytesCopied;
+            }
+            else
+            {
+                break;
+            }
+            
+        }
+        
+        String8.Length += BytesCopied;
+        Src += BytesCopied;
+        
+        if(BytesCopied == sizeof(Node->Content))
+        {
+            string8_node *PrevNode = Node;
+            PrevNode->Next = string8_node_pool_Borrow();
+            Node = string8_node_pool_Get(PrevNode->Next);
+        }
+        else
+        {
+            break;
+        }
+        
+    }
+    
+    return String8;
+}
+
 
 
 //
